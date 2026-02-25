@@ -1,0 +1,99 @@
+vet-agent/
+│
+├── docker-compose.yml          # Orquestra todos os serviços
+├── .env                        # Todas as variáveis de ambiente
+├── .env.example                # Template do .env para versionamento
+├── README.md
+│
+├── app/                        # 🤖 Core do sistema de agentes (FastAPI)
+│   ├── main.py                 # Entrypoint FastAPI + webhook WhatsApp
+│   ├── Dockerfile
+│   │
+│   ├── agents/                 # Agentes LangGraph
+│   │   ├── graph.py            # Grafo principal de orquestração
+│   │   ├── recepcionista.py    # Boas-vindas, triagem, identificação
+│   │   ├── informacoes.py      # Dúvidas via RAG
+│   │   ├── agendamento.py      # Agenda/remarca/cancela
+│   │   └── guardrails.py       # Validação entrada/saída
+│   │
+│   ├── integrations/           # Integrações externas
+│   │   ├── whatsapp.py         # Evolution API / Meta API
+│   │   ├── google_calendar.py  # Google Calendar
+│   │   └── email_sender.py     # Gmail / SMTP
+│   │
+│   ├── rag/                    # Pipeline RAG
+│   │   ├── ingestor.py         # Converte, chunka e indexa arquivos
+│   │   ├── retriever.py        # Busca semântica no pgvector
+│   │   └── memory.py           # Memória vetorial por cliente
+│   │
+│   ├── db/                     # Banco de dados
+│   │   ├── models.py           # Modelos SQLAlchemy
+│   │   ├── session.py          # Conexão PostgreSQL
+│   │   └── migrations/         # Scripts SQL iniciais
+│   │
+│   └── core/                   # Configurações centrais
+│       ├── config.py           # Leitura do .env
+│       ├── llm.py              # Instância do Gemini
+│       └── langsmith.py        # Setup do LangSmith
+│
+├── dashboard/                  # 📊 Streamlit (veterinário)
+│   ├── Dockerfile
+│   ├── app.py                  # Entrypoint Streamlit
+│   └── pages/
+│       ├── agenda.py           # Agendamentos do dia/semana
+│       ├── conversas.py        # Histórico por cliente
+│       └── metricas.py         # Gráficos e KPIs
+│
+├── rag_files/                  # 📁 Arquivos da clínica para RAG
+│   └── (seus .txt e .docx aqui)
+│
+└── nginx/                      # 🌐 Produção
+    ├── nginx.conf
+    └── Dockerfile
+
+
+tabelas banco:
+
+veterinarios ──────────────────────────┐
+                                       │
+clientes ──┬── pets                    │
+           │                           │
+           ├── sessoes ── mensagens     │
+           │      │                    │
+           │      └── memoria_clientes │
+           │                           │
+           └── consultas ──────────────┘
+                                       
+rag_documentos  (independente — base de conhecimento)
+
+
+
+Fluxo do Grafo antes do código
+
+Mensagem WhatsApp
+       │
+       ▼
+┌─────────────┐     bloqueada      ┌──────────────┐
+│  Guardrails │ ─────────────────► │  Resposta    │
+│  (entrada)  │                    │  de bloqueio │
+└─────────────┘                    └──────────────┘
+       │ ok
+       ▼
+┌─────────────┐
+│Recepcionista│  ── identifica cliente, boas-vindas, detecta intenção
+└─────────────┘
+       │
+       ├── intenção: INFORMACAO  ──► AgentInformacoes
+       ├── intenção: AGENDAR     ──► AgentAgendamento
+       ├── intenção: REMARCAR    ──► AgentAgendamento
+       ├── intenção: CANCELAR    ──► AgentAgendamento
+       └── intenção: SAUDACAO    ──► Recepcionista responde direto
+                                          │
+                                          ▼
+                                  ┌─────────────┐     bloqueada
+                                  │  Guardrails │ ──► resposta padrão
+                                  │   (saída)   │
+                                  └─────────────┘
+                                          │ ok
+                                          ▼
+                                   Envia ao cliente
