@@ -10,6 +10,16 @@ from app.agents.state import AgenteState
 from app.core.llm import get_llm
 from app.db.models import Consulta, Veterinario, TipoConsulta, StatusConsulta
 
+from app.integrations.google_calendar import (
+    criar_evento_calendario,
+    remarcar_evento,
+    cancelar_evento,
+)
+from app.integrations.email_sender import (
+    notificar_agendamento,
+    notificar_remarcacao,
+    notificar_cancelamento,
+)
 
 PROMPT_COLETAR_DADOS = """
 Você é a recepcionista de uma clínica veterinária coletando dados para agendamento.
@@ -268,18 +278,41 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
     await db.commit()
     await db.refresh(consulta)
 
-    # Gera mensagem de confirmação
-    confirmacao = await llm.ainvoke([
-        SystemMessage(content=PROMPT_CONFIRMAR.format(
-            dados=json.dumps({
-                **dados,
-                "veterinario": vet.nome,
-                "data": dados["data"],
-                "hora": dados["hora"],
-            }, ensure_ascii=False)
-        )),
-        HumanMessage(content="Gere a confirmação")
-    ])
+# Cria evento no Google Calendar
+google_event_id = criar_evento_calendario(
+    calendar_id=vet.google_calendar_id or "primary",
+    titulo=f"Consulta {dados.get('nome_pet', 'Pet')} — {dados.get('tipo_consulta', '')}",
+    data_hora=data_hora,
+    duracao_minutos=30,
+    nome_cliente=dados.get("nome_tutor", ""),
+    whatsapp_cliente=whatsapp,
+    nome_pet=dados.get("nome_pet", ""),
+    tipo_consulta=dados.get("tipo_consulta", ""),
+    motivo=dados.get("motivo", ""),
+)
+
+# Atualiza o google_event_id na consulta
+if google_event_id:
+    await db.execute(
+        update(Consulta)
+        .where(Consulta.id == consulta.id)
+        .values(google_event_id=google_event_id, email_enviado=True)
+    )
+    await db.commit()
+
+# Envia e-mail ao veterinário
+notificar_agendamento(
+    email_veterinario=vet.email,
+    nome_veterinario=vet.nome,
+    nome_cliente=dados.get("nome_tutor", ""),
+    whatsapp_cliente=whatsapp,
+    nome_pet=dados.get("nome_pet", ""),
+    especie_pet=dados.get("especie", ""),
+    tipo_consulta=dados.get("tipo_consulta", ""),
+    data_hora=data_hora,
+    motivo=dados.get("motivo", ""),
+    consulta_id=str(consulta.id),
+)
 
     return {
         **state,

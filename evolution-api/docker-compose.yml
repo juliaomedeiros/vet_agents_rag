@@ -1,0 +1,81 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: evolution_postgres
+    restart: always
+    environment:
+      - POSTGRES_DB=evolutionapi
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution123
+    volumes:
+      - evolution_postgres:/var/lib/postgresql/data
+    networks:
+      - vet-zap
+
+  redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: always
+    networks:
+      - vet-zap
+
+  evolution-api:
+    image: atendai/evolution-api:v2.1.1
+    container_name: evolution_api
+    restart: always
+    ports:
+      - "8080:8080"  # corrigido: era 8080:8081
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - AUTHENTICATION_API_KEY=julius_vetagentjp2026
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution123@postgres:5432/evolutionapi?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_v2
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=false
+      - DATABASE_SAVE_MESSAGE_UPDATE=false
+      - DATABASE_SAVE_DATA_CONTACTS=false
+      - DATABASE_SAVE_DATA_CHATS=false
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://evolution_redis:6379
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_LOCAL_ENABLED=false
+    volumes:
+      - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
+    networks:
+      - vet-zap
+
+  frontend:
+    image: evoapicloud/evolution-manager:latest
+    container_name: evolution_frontend
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      if [ -f /etc/nginx/conf.d/nginx.conf ]; then
+        sed -i 's/ must-revalidate//g' /etc/nginx/conf.d/nginx.conf;
+      fi &&
+      nginx -g 'daemon off;'
+      "
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - evolution-api
+    networks:
+      - vet-zap
+
+volumes:
+  evolution_store:
+  evolution_instances:
+  evolution_postgres:
+
+networks:
+  vet-zap:
+    name: vet-zap
+    external: true
