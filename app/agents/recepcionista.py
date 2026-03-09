@@ -4,10 +4,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from app.agents.state import AgenteState
-from app.core.llm import get_llm
-from app.db.models import Cliente, Sessao
-from app.rag.memory import montar_contexto_completo
+from agents.state import AgenteState
+from core.llm import get_llm
+from db.models import Cliente, Sessao
+from rag.memory import montar_contexto_completo
 import json
 import re
 
@@ -64,16 +64,26 @@ async def identificar_ou_criar_cliente(
     return novo_cliente, True
 
 
-async def criar_sessao(
+async def obter_ou_criar_sessao_ativa(
     db: AsyncSession,
     cliente_id: uuid.UUID
-) -> Sessao:
-    """Cria uma nova sessão de conversa para o cliente."""
+) -> tuple[Sessao, bool]:
+    """Cria uma nova sessão ou recupera sessão ativa para o cliente."""
+    resultado = await db.execute(
+        select(Sessao)
+        .where(Sessao.cliente_id == cliente_id, Sessao.ativa == True)
+        .order_by(Sessao.iniciada_em.desc())
+        .limit(1)
+    )
+    sessao = resultado.scalar_one_or_none()
+    if sessao:
+        return sessao, False
+
     sessao = Sessao(cliente_id=cliente_id)
     db.add(sessao)
     await db.commit()
     await db.refresh(sessao)
-    return sessao
+    return sessao, True
 
 
 async def detectar_intencao(mensagem: str) -> dict:
@@ -108,8 +118,8 @@ async def recepcionista(state: AgenteState, db: AsyncSession) -> AgenteState:
     # 1. Identifica cliente
     cliente, cliente_novo = await identificar_ou_criar_cliente(db, whatsapp)
 
-    # 2. Cria sessão
-    sessao = await criar_sessao(db, cliente.id)
+    # 2. Cria ou recupera sessão (se for nova, sessao_nova = True)
+    sessao, sessao_nova = await obter_ou_criar_sessao_ativa(db, cliente.id)
 
     # 3. Contexto RAG + memória
     contexto = await montar_contexto_completo(db, cliente.id, mensagem)
@@ -118,9 +128,9 @@ async def recepcionista(state: AgenteState, db: AsyncSession) -> AgenteState:
     resultado_intencao = await detectar_intencao(mensagem)
     intencao = resultado_intencao.get("intencao", "OUTRO")
 
-    # 5. Resposta de boas-vindas (só se for SAUDACAO ou cliente novo)
+    # 5. Resposta de boas-vindas (só se for nova sessão E (cliente novo OU saudação clara))
     resposta_bv = None
-    if intencao == "SAUDACAO" or cliente_novo:
+    if sessao_nova and (intencao == "SAUDACAO" or cliente_novo):
         nome = cliente.nome or "Tutor"
         historico_info = (
             f"\nHistórico do cliente:\n{contexto['historico_cliente']}"
@@ -134,7 +144,7 @@ Use linguagem coloquial, calorosa e profissional.
 {historico_info}
 
 Dê boas-vindas e pergunte como pode ajudar.
-Seja breve (máximo 2 linhas). Use emojis com moderação. 🐾
+Seja breve (em um parágrafo curto) e nunca deixe frases incompletas. Use emojis com moderação. 🐾
 """
         resposta_llm = await llm.ainvoke([
             SystemMessage(content=prompt_bv),

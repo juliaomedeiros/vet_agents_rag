@@ -1,6 +1,6 @@
 from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from app.core.config import get_settings
+from core.config import get_settings
 
 settings = get_settings()
 

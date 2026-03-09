@@ -8,7 +8,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
-from app.db.session import Base
+from db.session import Base
 import enum
 
 
@@ -149,7 +149,7 @@ class Mensagem(Base):
     id              : Mapped[uuid.UUID]       = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sessao_id       : Mapped[uuid.UUID]       = mapped_column(ForeignKey("sessoes.id", ondelete="CASCADE"))
     cliente_id      : Mapped[uuid.UUID]       = mapped_column(ForeignKey("clientes.id"))
-    origem          : Mapped[OrigemMensagem]  = mapped_column(SAEnum(OrigemMensagem), nullable=False)
+    origem          : Mapped[OrigemMensagem]  = mapped_column(SAEnum(OrigemMensagem, name="origem_mensagem"), nullable=False)
     conteudo        : Mapped[str]             = mapped_column(Text, nullable=False)
     bloqueada       : Mapped[bool]            = mapped_column(Boolean, default=False)
     motivo_bloqueio : Mapped[Optional[str]]   = mapped_column(String(100))
@@ -170,7 +170,7 @@ class RagDocumento(Base):
     nome_arquivo : Mapped[str]             = mapped_column(String(200), nullable=False)
     chunk_index  : Mapped[int]             = mapped_column(Integer, nullable=False)
     conteudo     : Mapped[str]             = mapped_column(Text, nullable=False)
-    embedding    : Mapped[Optional[list]]  = mapped_column(Vector(768))
+    embedding    : Mapped[Optional[list]]  = mapped_column(Vector(3072))
     metadata_json: Mapped[dict]            = mapped_column(JSONB, default={})
     criado_em    : Mapped[datetime]        = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -185,7 +185,7 @@ class MemoriaCliente(Base):
     cliente_id : Mapped[uuid.UUID]          = mapped_column(ForeignKey("clientes.id", ondelete="CASCADE"))
     sessao_id  : Mapped[Optional[uuid.UUID]]= mapped_column(ForeignKey("sessoes.id"))
     resumo     : Mapped[str]                = mapped_column(Text, nullable=False)
-    embedding  : Mapped[Optional[list]]     = mapped_column(Vector(768))
+    embedding  : Mapped[Optional[list]]     = mapped_column(Vector(3072))
     criado_em  : Mapped[datetime]           = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     cliente: Mapped["Cliente"] = relationship("Cliente", back_populates="memorias")

@@ -39,12 +39,10 @@ async def _enviar_evolution(numero: str, mensagem: str) -> bool:
 
     payload = {
         "number": numero,
+        "text": mensagem,
         "options": {
             "delay": 800,           # simula digitação (ms)
             "presence": "composing" # mostra "digitando..."
-        },
-        "textMessage": {
-            "text": mensagem
         }
     }
 
@@ -130,7 +128,7 @@ def parsear_webhook_evolution(payload: dict) -> Optional[dict]:
         if not texto:
             return None
 
-        numero = key.get("remoteJid", "").replace("@s.whatsapp.net", "")
+        numero = key.get("remoteJid", "").replace("@s.whatsapp.net", "").replace("@lid", "")
 
         return {
             "numero": numero,

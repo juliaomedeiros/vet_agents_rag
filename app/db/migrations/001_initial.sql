@@ -143,7 +143,7 @@ CREATE TABLE rag_documentos (
     nome_arquivo    VARCHAR(200)    NOT NULL,
     chunk_index     INT             NOT NULL,
     conteudo        TEXT            NOT NULL,
-    embedding       vector(768),    -- dimensão do text-embedding-004
+    embedding       vector(3072),    -- dimensão do gemini-embedding-001
     metadata_json   JSONB           NOT NULL DEFAULT '{}',
     criado_em       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
@@ -162,7 +162,7 @@ CREATE TABLE memoria_clientes (
     cliente_id      UUID            NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
     sessao_id       UUID            REFERENCES sessoes(id),
     resumo          TEXT            NOT NULL,  -- resumo semântico da interação
-    embedding       vector(768),
+    embedding       vector(3072),
     criado_em       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 

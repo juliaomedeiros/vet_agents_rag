@@ -1,11 +1,11 @@
 from langgraph.graph import StateGraph, END
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.state import AgenteState
-from app.agents.guardrails import guardrail_entrada, guardrail_saida
-from app.agents.recepcionista import recepcionista
-from app.agents.informacoes import agente_informacoes
-from app.agents.agendamento import agente_agendamento
+from agents.state import AgenteState
+from agents.guardrails import guardrail_entrada, guardrail_saida
+from agents.recepcionista import recepcionista
+from agents.informacoes import agente_informacoes
+from agents.agendamento import agente_agendamento
 
 
 # ─────────────────────────────────────────────────────────────
@@ -20,11 +20,12 @@ def rotear_apos_guardrail_entrada(state: AgenteState) -> str:
 
 def rotear_apos_recepcionista(state: AgenteState) -> str:
     """Roteia baseado na intenção detectada."""
+    if state.get("resposta_final"):
+        return "guardrail_saida"
+
     intencao = state.get("intencao", "OUTRO")
 
-    if intencao == "SAUDACAO":
-        return "guardrail_saida"  # boas-vindas já geradas
-    elif intencao == "INFORMACAO":
+    if intencao == "INFORMACAO":
         return "informacoes"
     elif intencao in ["AGENDAR", "REMARCAR", "CANCELAR"]:
         return "agendamento"
@@ -48,20 +49,26 @@ def criar_grafo(db: AsyncSession) -> StateGraph:
     grafo = StateGraph(AgenteState)
 
     # ── Adiciona nós ────────────────────────────────────────
-    grafo.add_node("guardrail_entrada",
-        lambda s: guardrail_entrada(s))
+    async def node_guardrail_entrada(s):
+        return await guardrail_entrada(s)
 
-    grafo.add_node("recepcionista",
-        lambda s: recepcionista(s, db))
+    async def node_recepcionista(s):
+        return await recepcionista(s, db)
 
-    grafo.add_node("informacoes",
-        lambda s: agente_informacoes(s, db))
+    async def node_informacoes(s):
+        return await agente_informacoes(s, db)
 
-    grafo.add_node("agendamento",
-        lambda s: agente_agendamento(s, db))
+    async def node_agendamento(s):
+        return await agente_agendamento(s, db)
 
-    grafo.add_node("guardrail_saida",
-        lambda s: guardrail_saida(s))
+    async def node_guardrail_saida(s):
+        return await guardrail_saida(s)
+
+    grafo.add_node("guardrail_entrada", node_guardrail_entrada)
+    grafo.add_node("recepcionista", node_recepcionista)
+    grafo.add_node("informacoes", node_informacoes)
+    grafo.add_node("agendamento", node_agendamento)
+    grafo.add_node("guardrail_saida", node_guardrail_saida)
 
     # ── Define ponto de entrada ─────────────────────────────
     grafo.set_entry_point("guardrail_entrada")
@@ -107,7 +114,31 @@ async def processar_mensagem(
     Ponto de entrada principal — chamado pelo webhook FastAPI.
     Retorna a resposta final para enviar ao cliente via WhatsApp.
     """
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, AIMessage
+    from db.models import Cliente, Sessao, Mensagem, OrigemMensagem
+    from sqlalchemy import select
+    import uuid
+
+    # Identifica sessão ativa e histórico
+    history = []
+    res_cliente = await db.execute(select(Cliente).where(Cliente.whatsapp == whatsapp))
+    cliente = res_cliente.scalar_one_or_none()
+    
+    if cliente:
+        res_sessao = await db.execute(
+            select(Sessao)
+            .where(Sessao.cliente_id == cliente.id, Sessao.ativa == True)
+            .order_by(Sessao.iniciada_em.desc())
+            .limit(1)
+        )
+        sessao_ativa = res_sessao.scalar_one_or_none()
+        if sessao_ativa:
+            res_msg = await db.execute(select(Mensagem).where(Mensagem.sessao_id == sessao_ativa.id).order_by(Mensagem.criado_em.desc()).limit(10))
+            for m in reversed(res_msg.scalars().all()):
+                if m.origem == OrigemMensagem.cliente:
+                    history.append(HumanMessage(content=m.conteudo))
+                else:
+                    history.append(AIMessage(content=m.conteudo))
 
     grafo = criar_grafo(db)
 
@@ -117,7 +148,7 @@ async def processar_mensagem(
         "sessao_id": None,
         "cliente_nome": None,
         "cliente_novo": False,
-        "messages": (historico_mensagens or []) + [HumanMessage(content=mensagem)],
+        "messages": (historico_mensagens or history) + [HumanMessage(content=mensagem)],
         "intencao": None,
         "contexto_clinica": None,
         "historico_cliente": None,
@@ -130,4 +161,14 @@ async def processar_mensagem(
     }
 
     resultado = await grafo.ainvoke(estado_inicial)
-    return resultado.get("resposta_final", "Desculpe, tive um problema. Pode repetir? 😅")
+    resposta = resultado.get("resposta_final", "Desculpe, tive um problema. Pode repetir? 😅")
+
+    sessao_id = resultado.get("sessao_id")
+    cliente_id = resultado.get("cliente_id")
+    if sessao_id and cliente_id:
+        msg_user = Mensagem(sessao_id=uuid.UUID(sessao_id), cliente_id=uuid.UUID(cliente_id), origem=OrigemMensagem.cliente, conteudo=mensagem)
+        msg_bot  = Mensagem(sessao_id=uuid.UUID(sessao_id), cliente_id=uuid.UUID(cliente_id), origem=OrigemMensagem.agente, conteudo=resposta)
+        db.add_all([msg_user, msg_bot])
+        await db.commit()
+
+    return resposta

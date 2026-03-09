@@ -23,6 +23,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - vet-zap
 
   # ─────────────────────────────────────────
   # 🤖 Aplicação principal (FastAPI + Agentes)
@@ -43,6 +45,8 @@ services:
       postgres:
         condition: service_healthy
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - vet-zap
 
   # ─────────────────────────────────────────
   # 📊 Dashboard Streamlit (veterinário)
@@ -56,10 +60,14 @@ services:
     env_file: .env
     ports:
       - "8501:8501"
+    volumes:
+      - ./dashboard:/app
     depends_on:
       postgres:
         condition: service_healthy
     command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    networks:
+      - vet-zap
 
   # ─────────────────────────────────────────
   # 🌐 Nginx (apenas em produção)

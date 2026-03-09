@@ -3,8 +3,8 @@ from datetime import datetime
 from sqlalchemy import text, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.llm import get_embeddings, get_llm
-from app.db.models import MemoriaCliente, Sessao, Mensagem, OrigemMensagem
+from core.llm import get_embeddings, get_llm
+from db.models import MemoriaCliente, Sessao, Mensagem, OrigemMensagem
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
@@ -155,7 +155,7 @@ async def montar_contexto_completo(
     e histórico do cliente (memória vetorial).
     Retorna dict pronto para injetar no prompt dos agentes.
     """
-    from app.rag.retriever import buscar_contexto, formatar_contexto
+    from rag.retriever import buscar_contexto, formatar_contexto
 
     # Busca em paralelo para melhorar performance
     import asyncio

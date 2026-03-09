@@ -1,8 +1,8 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.llm import get_embeddings
-from app.db.models import RagDocumento
+from core.llm import get_embeddings
+from db.models import RagDocumento
 
 
 # ─────────────────────────────────────────────────────────────
@@ -12,7 +12,7 @@ async def buscar_contexto(
     db: AsyncSession,
     pergunta: str,
     top_k: int = 5,
-    threshold: float = 0.75
+    threshold: float = 0.30
 ) -> list[dict]:
     """
     Realiza busca por similaridade de cosseno no pgvector.
@@ -89,7 +89,7 @@ async def recuperar_contexto_formatado(
     db: AsyncSession,
     pergunta: str,
     top_k: int = 5,
-    threshold: float = 0.75
+    threshold: float = 0.30
 ) -> str:
     chunks = await buscar_contexto(db, pergunta, top_k, threshold)
     return formatar_contexto(chunks)

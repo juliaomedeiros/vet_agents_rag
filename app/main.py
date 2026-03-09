@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,15 +10,15 @@ import uvicorn
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from app.db.models import Consulta, StatusConsulta
-from app.core.config import get_settings
-from app.core.langsmith import configurar_langsmith
-from app.core.llm import get_llm
-from app.db.session import AsyncSessionLocal, get_db
-from app.agents.graph import processar_mensagem
-from app.integrations.whatsapp import parsear_webhook, enviar_mensagem
-from app.rag.ingestor import indexar_todos_arquivos
-from app.integrations.google_calendar import listar_proximos_eventos
+from db.models import Consulta, StatusConsulta
+from core.config import get_settings
+from core.langsmith import configurar_langsmith
+from core.llm import get_llm
+from db.session import AsyncSessionLocal, get_db
+from agents.graph import processar_mensagem
+from integrations.whatsapp import parsear_webhook, enviar_mensagem
+from rag.ingestor import indexar_todos_arquivos
+from integrations.google_calendar import listar_proximos_eventos
 
 
 settings = get_settings()
@@ -30,11 +30,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 # Modelos Pydantic para webhooks
 # ─────────────────────────────────────────────────────────────
-class WebhookPayload(BaseModel):
-    """Payload genérico para webhook WhatsApp."""
-    pass
-
-
 class StatusResponse(BaseModel):
     """Resposta de status do sistema."""
     status: str = "OK"
@@ -113,7 +108,7 @@ async def status():
 # ─────────────────────────────────────────────────────────────
 @app.post("/webhook/whatsapp")
 async def webhook_whatsapp(
-    payload: WebhookPayload,
+    payload: Dict[str, Any],
     db: AsyncSessionLocal = Depends(get_db),
     background_tasks: BackgroundTasks = None
 ):
@@ -124,11 +119,14 @@ async def webhook_whatsapp(
     Meta API: configure webhook apontando para esta URL
     """
     try:
+        # Debug: visualiza a estrutura que a evolution está mandando
+        logger.info(f"Payload Raw: {payload}")
+        
         # Parseia o webhook (Evolution ou Meta)
-        webhook_data = parsear_webhook(payload.dict())
+        webhook_data = parsear_webhook(payload)
         
         if not webhook_data:
-            logger.info("[Webhook] Mensagem ignorada (não é texto)")
+            logger.info("[Webhook] Mensagem ignorada (não é texto ou não suportado)")
             return {"status": "ignored"}
 
         numero = webhook_data["numero"]
@@ -222,7 +220,7 @@ async def admin_listar_consultas(
     """
     from sqlalchemy import func, and_
     from datetime import datetime, timedelta
-    from app.db.models import Consulta, StatusConsulta
+    from db.models import Consulta, StatusConsulta
 
     ate_data = datetime.utcnow() + timedelta(days=dias_futuro)
 

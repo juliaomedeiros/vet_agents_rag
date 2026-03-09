@@ -1,7 +1,7 @@
 import re
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.agents.state import AgenteState
-from app.core.llm import get_llm
+from agents.state import AgenteState
+from core.llm import get_llm
 
 # ─────────────────────────────────────────────────────────────
 # Padrões de prompt injection (regex)

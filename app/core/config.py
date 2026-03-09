@@ -28,8 +28,8 @@ class Settings(BaseSettings):
 
     # ── Gemini ──────────────────────────────────────
     gemini_api_key: str
-    gemini_model: str = "gemini-1.5-pro"
-    gemini_embedding_model: str = "models/text-embedding-004"
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_embedding_model: str = "models/gemini-embedding-001"
 
     # ── LangSmith ───────────────────────────────────
     langchain_tracing_v2: bool = True
@@ -71,7 +71,7 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """
     Singleton — importar assim em qualquer módulo:
-    from app.core.config import get_settings
+    from core.config import get_settings
     settings = get_settings()
     """
     return Settings()

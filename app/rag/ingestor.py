@@ -7,9 +7,9 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
-from app.core.llm import get_embeddings
-from app.db.models import RagDocumento
+from core.config import get_settings
+from core.llm import get_embeddings
+from db.models import RagDocumento
 
 settings = get_settings()
 
