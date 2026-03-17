@@ -2,51 +2,62 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from agents.state import AgenteState
 from core.llm import get_llm
 from sqlalchemy.ext.asyncio import AsyncSession
+from skills.loader import load_skill
 
 
-PROMPT_INFORMACOES = """
-Você é a recepcionista de uma clínica veterinária especializada.
-Responda a dúvida do cliente de forma simpática, coloquial e precisa.
+# ─────────────────────────────────────────────────────────────
+# Carrega o skill para usar como base de persona e referências
+# ─────────────────────────────────────────────────────────────
+_SKILL = load_skill("vet-clinic-receptionist")
 
-A clinica oferece os tipos de atendimento abaixo:
-
-
-
-- Consulta Clínica Geral (clínica geral, clinica cirúrgica, ortopedia)
-
-- Consulta Neurológica (neurologia clínica de căes e gatos, neurocirurgia avançada, neuro-oncologia);
-
-- Retorno de consulta clínica geral (valor= pode ser concedido um retorno gratuito até 30 dias após a data da consulta)
-
-- Retorno de consulta neurológica (valor= pode ser concedido um retorno gratuito até 60 dias após a data da consulta)
+# Referências do skill usadas para enriquecer as respostas
+_CLINIC_INFO = _SKILL["references"].get("clinic_info", "")
+_SPECIALTIES = _SKILL["references"].get("specialties", "")
 
 
-Use as informações acima e as informações do contexto abaixo. Se não souber, diga honestamente
-e sugira que o cliente ligue para a clínica.
+PROMPT_INFORMACOES = f"""{_SKILL["persona"]}
 
-CONTEXTO DA CLÍNICA:
-{contexto_clinica}
+---
 
-HISTÓRICO GERAL DO CLIENTE:
-{historico_cliente}
+## Referência: Informações da Clínica
+{_CLINIC_INFO}
 
-HISTÓRICO RECENTE DA CONVERSA:
-{historico_recente}
+## Referência: Especialidades e Corpo Clínico
+{_SPECIALTIES}
 
-REGRAS:
-- Linguagem coloquial e acolhedora (não seja robótico)
+---
+
+## Contexto Adicional (Base de Conhecimento RAG da Clínica)
+{{contexto_clinica}}
+
+## Histórico do Cliente
+{{historico_cliente}}
+
+## Histórico Recente da Conversa
+{{historico_recente}}
+
+## Instruções para esta Resposta
+- Responda a dúvida do cliente de forma simpática, coloquial e muito precisa.
+- Use as informações das referências acima e do contexto RAG.
+- Se a dúvida for sobre sintomas ou saúde do animal, direcione para a especialidade certa conforme `Especialidades e Corpo Clínico`, mas JAMAIS dê diagnóstico.
+- Se não souber, diga honestamente e sugira que o cliente ligue ou passe pela clínica.
+- Linguagem coloquial e acolhedora (não seja robótico).
 - Use emojis com moderação 🐾🐕🐈
-- Máximo 3 parágrafos
-- Se mencionar horários ou valores, confirme que podem sofrer alterações
-- Nunca invente informações médicas 
-- Se não souber a resposta, sugira para marcar a consulta e tirar a duvida direto com o medico veterinario" 
-- Ao final, pergunte se pode ajudar em mais alguma coisa
+- Seja direto e muito conciso (não gaste tokens desnecessariamente).
+- SEMPRE termine a frase e NUNCA deixe falas incompletas ou cortadas no final.
+- Máximo 2 parágrafos.
+- Se mencionar horários ou valores, confirme que podem sofrer alterações.
+- Nunca invente informações médicas.
+- Ao final, pergunte se pode ajudar em mais alguma coisa.
 """
 
 
 async def agente_informacoes(state: AgenteState, db: AsyncSession) -> AgenteState:
     """
-    Responde dúvidas sobre a clínica usando RAG.
+    Responde dúvidas sobre a clínica usando:
+    - Persona e referências do skill (clinic_info, specialties)
+    - Contexto RAG da clínica
+    - Histórico do cliente (memória vetorial)
     """
     llm = get_llm()
     mensagem = state["messages"][-1].content

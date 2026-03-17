@@ -19,47 +19,98 @@ from integrations.email_sender import (
     notificar_remarcacao,
     notificar_cancelamento,
 )
+from skills.loader import load_skill
 
-PROMPT_COLETAR_DADOS = """
-Você é a recepcionista de uma clínica veterinária coletando dados para agendamento.
+# ─────────────────────────────────────────────────────────────
+# Skill — persona e referências reais da clínica
+# ─────────────────────────────────────────────────────────────
+_SKILL = load_skill("vet-clinic-receptionist")
+_CLINIC_INFO = _SKILL["references"].get("clinic_info", "")
+
+PROMPT_COLETAR_DADOS = f"""{_SKILL["persona"]}
+
+---
+
+Sua tarefa agora é coletar os dados necessários para agendar uma consulta.
 Analise a conversa e extraia as informações disponíveis.
 
+📅 DATA E HORA ATUAL DO SISTEMA: {{data_hoje}}
+
+⚠️ IMPORTANTE: Sempre use a data acima como referência para calcular datas relativas
+("quinta-feira", "amanhã", "semana que vem", etc.) e converta para DD/MM/AAAA no JSON.
+
 Responda APENAS com JSON:
-{{
+{{{{
   "nome_tutor": "nome ou null",
   "nome_pet": "nome do animal ou null",
   "especie": "cão/gato/outro ou null",
-  "tipo_consulta": "clinica_geral|clinica_cirurgica|ortopedia|neurologia_clinica|neurocirurgia|neuro_oncologia ou null",
+  "tipo_consulta": "clinica_geral|neurologia|retorno_clinica_geral|retorno_neurologia|segmento_neurologia|coleta_exames ou null",
   "data": "DD/MM/AAAA ou null",
   "hora": "HH:MM ou null",
   "motivo": "motivo da consulta ou null",
   "dados_completos": true/false,
-  "proximo_passo": "o que perguntar ao cliente para completar os dados"
-}}
+  "proximo_passo": "instrução interna descrevendo o QUE ainda falta coletar do cliente"
+}}}}
+
+Informações e tipos de consulta da clínica:
+{_CLINIC_INFO}
+
+Contexto RAG:
+{{contexto}}
 
 Conversa atual:
-{historico}
-
-Contexto da clínica:
-{contexto}
+{{historico}}
 """
 
-PROMPT_CONFIRMAR = """
-Você é a recepcionista de uma clínica veterinária.
+PROMPT_RESPOSTA_INTERMEDIARIA = f"""{_SKILL["persona"]}
+
+---
+
+Sua tarefa é transformar uma instrução interna em uma mensagem conversacional para o cliente.
+
+Instrução interna (o que ainda precisa ser obtido): {{proximo_passo}}
+
+Informações da clínica para referência:
+{_CLINIC_INFO}
+
+REGRAS:
+- Transforme a instrução numa frase natural, acolhedora e em primeira pessoa
+- Se ainda não soubermos o tipo de consulta, apresente as opções disponíveis de forma clara
+- Use linguagem coloquial e calorosa
+- Seja breve e direto (máximo 2 frases)
+- SEMPRE termine a frase completamente, nunca corte no meio
+- Use emojis com moderação 🐾
+- Nunca exponha a instrução interna literalmente — reescreva de forma humana
+"""
+
+PROMPT_CONFIRMAR = f"""{_SKILL["persona"]}
+
+---
+
 Com base nos dados coletados, gere uma mensagem de CONFIRMAÇÃO de agendamento
-para enviar ao cliente. Use linguagem coloquial e acolhedora.
+para enviar ao cliente. Use o template de confirmação como guia.
+
+Template de confirmação:
+{_SKILL["assets"].get("appointment_confirmation", "")}
 
 Dados da consulta:
-{dados}
+{{dados}}
 
-Inclua: nome do pet, importante a informaçao da especie(gato, cachorro, etc), a raça do animal, tipo de consulta, data, hora e nome do veterinário.
-
-Finalize perguntando se precisa de mais alguma coisa. 🐾
+REGRAS:
+- Inclua: nome do pet, espécie (gato, cachorro, etc), tipo de consulta, data, hora
+- Seja direto e conciso (não gaste tokens desnecessariamente).
+- SEMPRE termine a frase e NUNCA deixe frases incompletas ou cortadas.
+- Finalize perguntando se precisa de mais alguma coisa. 🐾
 """
 
-PROMPT_REMARCAR = """
-Você é a recepcionista de uma clínica veterinária.
+PROMPT_REMARCAR = _SKILL["persona"] + """
+
+---
+
 O cliente quer REMARCAR uma consulta.
+
+📅 DATA E HORA ATUAL DO SISTEMA: {data_hoje}
+Use esta data como referência para calcular datas relativas ("quinta", "amanhã", etc.).
 
 Consultas agendadas do cliente:
 {consultas}
@@ -68,6 +119,7 @@ Mensagem do cliente: {mensagem}
 
 Extraia a nova data/hora desejada e qual consulta remarca, leve em consideração
 o horário que a clínica funciona e os dias da semana que ela está aberta.
+Horário de funcionamento: Segunda a Sexta das 14h00 às 18h00.
 Responda APENAS com JSON:
 {{
   "consulta_id": "UUID da consulta a remarcar ou null",
@@ -114,6 +166,16 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
     mensagem = state["messages"][-1].content
     cliente_id = state.get("cliente_id")
     whatsapp = state.get("whatsapp", "")
+
+    # Data e dia da semana atuais — injetados nos prompts para que o LLM
+    # consiga converter expressões relativas ("quinta", "amanhã") em datas reais
+    agora = datetime.now()
+    DIAS_SEMANA = ["Segunda-feira", "Terça-feira", "Quarta-feira",
+                   "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    data_hoje = (
+        f"{DIAS_SEMANA[agora.weekday()]}, {agora.strftime('%d/%m/%Y')} — "
+        f"horário atual: {agora.strftime('%H:%M')}"
+    )
 
     # ── CANCELAR ────────────────────────────────────────────
     if intencao == "CANCELAR":
@@ -195,7 +257,8 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
         resposta = await llm.ainvoke([
             SystemMessage(content=PROMPT_REMARCAR.format(
                 consultas=json.dumps(lista_json, ensure_ascii=False),
-                mensagem=mensagem
+                mensagem=mensagem,
+                data_hoje=data_hoje
             )),
             HumanMessage(content=mensagem)
         ])
@@ -275,7 +338,8 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
     resposta = await llm.ainvoke([
         SystemMessage(content=PROMPT_COLETAR_DADOS.format(
             historico=historico,
-            contexto=state.get("contexto_clinica", "")
+            contexto=state.get("contexto_clinica", ""),
+            data_hoje=data_hoje
         )),
         HumanMessage(content=mensagem)
     ])
@@ -290,13 +354,18 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
         }
 
     if not dados.get("dados_completos"):
+        # Converte instrução interna em mensagem conversacional via LLM
+        instrucao = dados.get("proximo_passo", "Faltam informações para concluir o agendamento.")
+        resposta_intermediaria = await llm.ainvoke([
+            SystemMessage(content=PROMPT_RESPOSTA_INTERMEDIARIA.format(
+                proximo_passo=instrucao
+            )),
+            HumanMessage(content=mensagem)
+        ])
         return {
             **state,
             "dados_agendamento": dados,
-            "resposta_final": dados.get(
-                "proximo_passo",
-                "Pode me passar mais alguns detalhes para finalizar o agendamento? 😊"
-            )
+            "resposta_final": resposta_intermediaria.content
         }
 
     # Dados completos — cria consulta no banco
@@ -308,12 +377,16 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
 
     tipo_map = {
         "clinica_geral": TipoConsulta.clinica_geral,
-        "clinica_cirurgica": TipoConsulta.clinica_cirurgica,
-        "ortopedia": TipoConsulta.ortopedia,
-        "neurologia_clinica": TipoConsulta.neurologia_clinica,
-        "neurocirurgia": TipoConsulta.neurocirurgia,
-        "neuro_oncologia": TipoConsulta.neuro_oncologia,
+        "neurologia": TipoConsulta.neurologia_clinica,
+        "retorno_clinica_geral": TipoConsulta.clinica_geral,
+        "retorno_neurologia": TipoConsulta.neurologia_clinica,
+        "segmento_neurologia": TipoConsulta.neurologia_clinica,
+        "coleta_exames": TipoConsulta.clinica_geral,
     }
+
+    # Primeira consulta neurológica dura 1h; demais duram 30min (conforme clinic_info)
+    tipo_raw = dados.get("tipo_consulta", "clinica_geral")
+    duracao = 60 if tipo_raw == "neurologia" else 30
 
     consulta = Consulta(
         cliente_id=uuid.UUID(cliente_id),
@@ -335,7 +408,7 @@ async def agente_agendamento(state: AgenteState, db: AsyncSession) -> AgenteStat
         calendar_id=vet.google_calendar_id or "primary",
         titulo=f"Consulta {dados.get('nome_pet', 'Pet')} — {dados.get('tipo_consulta', '')}",
         data_hora=data_hora,
-        duracao_minutos=30,
+        duracao_minutos=duracao,
         nome_cliente=dados.get("nome_tutor", ""),
         whatsapp_cliente=whatsapp,
         nome_pet=dados.get("nome_pet", ""),
