@@ -160,7 +160,16 @@ async def processar_mensagem(
         "resposta_final": None,
     }
 
-    resultado = await grafo.ainvoke(estado_inicial)
+    resultado = await grafo.ainvoke(
+        estado_inicial,
+        config={
+            # Agrupa todas as mensagens do mesmo contato num único trace no LangSmith
+            "configurable": {"thread_id": whatsapp},
+            # Nomeia o trace com o número — facilita a busca no painel
+            "run_name": f"vet-agent | {whatsapp}",
+        },
+    )
+
     resposta = resultado.get("resposta_final", "Desculpe, tive um problema. Pode repetir? 😅")
 
     sessao_id = resultado.get("sessao_id")

@@ -1,111 +1,213 @@
+"""
+manage_schedule.py
+──────────────────
+Gerencia agendamentos da clínica de forma independente do banco PostgreSQL.
+Usa um arquivo JSON local como persistência simples (schedule_db.json).
+
+Funções públicas:
+  schedule()               → agenda nova consulta
+  cancel()                 → cancela consulta por ID
+  reschedule()             → remarca consulta por ID para nova data/hora
+  list_doctor_schedule()   → lista agenda de um médico em uma data
+  list_available_slots()   → lista horários livres para um médico em uma data
+"""
+
 import json
-import argparse
 import os
 
-# Simulação de um banco de dados de agendamentos em JSON
+# ─────────────────────────────────────────────────────────────
+# Configurações
+# ─────────────────────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "schedule_db.json")
 
-def load_db():
+SPECIALISTS: dict[str, list[str]] = {
+    "Clínica Geral": ["Dr. Daniel Travassos"],
+    "Neurologia":    ["Dr. Daniel Travassos"],
+}
+
+# Slots de 30min, seg-sex 14h-18h
+HORARIOS: list[str] = [
+    "14:00", "14:30", "15:00", "15:30",
+    "16:00", "16:30", "17:00", "17:30"
+]
+
+
+# ─────────────────────────────────────────────────────────────
+# Helpers de persistência
+# ─────────────────────────────────────────────────────────────
+def load_db() -> list[dict]:
+    """Lê o arquivo JSON de agendamentos. Retorna lista vazia se não existir."""
     if os.path.exists(DB_PATH):
         try:
-            with open(DB_PATH, 'r', encoding='utf-8') as f:
+            with open(DB_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, OSError):
             return []
     return []
 
-def save_db(data):
-    with open(DB_PATH, 'w', encoding='utf-8') as f:
+
+def save_db(data: list[dict]) -> None:
+    """Salva a lista de agendamentos no JSON, criando o diretório se necessário."""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    with open(DB_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-def load_specialists():
-    # Simulação de base de especialistas (só pra referência interna do script, os doutores de specialties.md)
-    return {
-        "Clínica Geral": ["Dr. Carlos Miranda", "Dra. Ana Silva"],
-        "Ortopedia": ["Dr. Roberto Mendes"],
-        "Neurologia": ["Dra. Fernanda Torres"],
-        "Dermatologia": ["Dra. Beatriz Costa"],
-        "Cardiologia": ["Dr. João Paulo"]
-    }
 
-def schedule(tutor, pet, doctor, specialty, date, time):
-    db = load_db()
-    
-    # Validação simples de especialidade
-    specs = load_specialists()
-    if specialty not in specs:
-        return f"Erro: Especialidade '{specialty}' não encontrada. Verifique o nome correto."
-    if doctor not in specs[specialty]:
-        return f"Erro: O(a) médico(a) {doctor} não atende pela especialidade {specialty}."
-
-    # Verifica conflito
+# ─────────────────────────────────────────────────────────────
+# Lógica interna de slots e conflitos
+# ─────────────────────────────────────────────────────────────
+def _ocupados(db: list[dict], doctor: str, date: str) -> set[str]:
+    """
+    Retorna o conjunto de horários bloqueados para um médico em uma data.
+    Consultas de 60min bloqueiam também o slot seguinte.
+    """
+    ocupado: set[str] = set()
     for app in db:
-        if app['doctor'] == doctor and app['date'] == date and app['time'] == time:
-            return f"Erro: O médico {doctor} já possui consulta marcada no dia {date} às {time}."
-    
-    # Pega max ID
-    new_id = 1
-    if db:
-        new_id = max(app['id'] for app in db) + 1
+        if app["doctor"] != doctor or app["date"] != date:
+            continue
+        h = app["time"]
+        ocupado.add(h)
+        if app.get("duration", 30) == 60 and h in HORARIOS:
+            idx = HORARIOS.index(h)
+            if idx + 1 < len(HORARIOS):
+                ocupado.add(HORARIOS[idx + 1])
+    return ocupado
 
-    new_app = {
-        "id": new_id,
-        "tutor": tutor,
-        "pet": pet,
-        "doctor": doctor,
+
+def _tem_conflito(db: list[dict], doctor: str, date: str,
+                  time: str, duration: int, exclude_id: int | None = None) -> bool:
+    """
+    Verifica se há conflito para um médico/data/horário/duração.
+    Se exclude_id for fornecido, ignora aquele agendamento (útil no reschedule).
+    """
+    bloqueados = _ocupados(
+        [a for a in db if a["id"] != exclude_id] if exclude_id is not None else db,
+        doctor, date
+    )
+    if time in bloqueados:
+        return True
+    # Consulta de 1h precisa do slot seguinte livre também
+    if duration == 60 and time in HORARIOS:
+        idx = HORARIOS.index(time)
+        if idx + 1 < len(HORARIOS) and HORARIOS[idx + 1] in bloqueados:
+            return True
+    return False
+
+
+def get_available_slots(doctor: str, date: str, duration: int = 30) -> list[str]:
+    """Retorna lista de horários livres para um médico em uma data."""
+    db = load_db()
+    bloqueados = _ocupados(db, doctor, date)
+
+    livres: list[str] = []
+    for i, h in enumerate(HORARIOS):
+        if h in bloqueados:
+            continue
+        if duration == 60:
+            # Precisa de 2 slots consecutivos livres
+            if i + 1 < len(HORARIOS) and HORARIOS[i + 1] not in bloqueados:
+                livres.append(h)
+        else:
+            livres.append(h)
+    return livres
+
+
+# ─────────────────────────────────────────────────────────────
+# Funções públicas
+# ─────────────────────────────────────────────────────────────
+def schedule(tutor: str, pet: str, doctor: str, specialty: str,
+             date: str, time: str, primeira_neurologica: bool = False) -> str:
+    """Agenda uma nova consulta. Retorna mensagem de resultado."""
+    if specialty not in SPECIALISTS:
+        return (f"Erro: Especialidade '{specialty}' não encontrada. "
+                f"Disponíveis: {list(SPECIALISTS.keys())}")
+    if doctor not in SPECIALISTS[specialty]:
+        return (f"Erro: {doctor} não atende {specialty}. "
+                f"Médicos disponíveis: {SPECIALISTS[specialty]}")
+    if time not in HORARIOS:
+        return f"Erro: Horário '{time}' inválido. Disponíveis: {HORARIOS}"
+
+    duration = 60 if (specialty == "Neurologia" and primeira_neurologica) else 30
+    db = load_db()
+
+    if _tem_conflito(db, doctor, date, time, duration):
+        return f"Erro: {doctor} já possui consulta em {date} às {time} (ou slot seguinte ocupado para 1h)."
+
+    new_id = (max(a["id"] for a in db) + 1) if db else 1
+    db.append({
+        "id":        new_id,
+        "tutor":     tutor,
+        "pet":       pet,
+        "doctor":    doctor,
         "specialty": specialty,
-        "date": date,
-        "time": time
-    }
-    db.append(new_app)
+        "date":      date,
+        "time":      time,
+        "duration":  duration,
+    })
     save_db(db)
-    return f"Sucesso! Consulta ID {new_app['id']} agendada. Tutor: {tutor}, Pet: {pet}, Médico: {doctor}, Especialidade: {specialty}, Data: {date}, Hora: {time}."
+    return (f"✅ Consulta ID {new_id} agendada!\n"
+            f"Tutor: {tutor} | Pet: {pet} | Médico: {doctor}\n"
+            f"Especialidade: {specialty} | Data: {date} | Hora: {time} | Duração: {duration}min")
 
-def cancel(app_id):
+
+def cancel(app_id: int) -> str:
+    """Cancela uma consulta pelo ID."""
     db = load_db()
-    for app in db:
-        if app['id'] == app_id:
-            db.remove(app)
+    for i, app in enumerate(db):
+        if app["id"] == app_id:
+            removed = db.pop(i)          # remove sem iterar e deletar ao mesmo tempo
             save_db(db)
-            return f"Sucesso: Consulta {app_id} do pet {app['pet']} (Tutor: {app['tutor']}) foi cancelada."
-    return f"Erro: Consulta com ID {app_id} não encontrada."
+            return (f"✅ Consulta {app_id} do pet '{removed['pet']}' "
+                    f"(Tutor: {removed['tutor']}) cancelada.")
+    return f"Erro: Consulta ID {app_id} não encontrada."
 
-def list_doctor_schedule(doctor, date):
+
+def reschedule(app_id: int, new_date: str, new_time: str) -> str:
+    """Remarca uma consulta para nova data/hora."""
+    if new_time not in HORARIOS:
+        return f"Erro: Horário '{new_time}' inválido. Disponíveis: {HORARIOS}"
+
     db = load_db()
-    appointments = [app for app in db if app['doctor'] == doctor and app['date'] == date]
+    for i, app in enumerate(db):
+        if app["id"] != app_id:
+            continue
+
+        duration = app.get("duration", 30)
+        if _tem_conflito(db, app["doctor"], new_date, new_time, duration, exclude_id=app_id):
+            return (f"Erro: {app['doctor']} já tem consulta em "
+                    f"{new_date} às {new_time} (ou slot seguinte ocupado para 1h).")
+
+        # Atualiza em uma cópia para evitar mutação silenciosa na lista original
+        updated = {**app, "date": new_date, "time": new_time}
+        db[i] = updated
+        save_db(db)
+        return (f"✅ Consulta {app_id} reagendada!\n"
+                f"Pet: {updated['pet']} | Nova data: {new_date} às {new_time}")
+
+    return f"Erro: Consulta ID {app_id} não encontrada."
+
+
+def list_doctor_schedule(doctor: str, date: str) -> str:
+    """Lista a agenda completa de um médico em uma data."""
+    db = load_db()
+    appointments = [a for a in db if a["doctor"] == doctor and a["date"] == date]
     if not appointments:
-        return f"A agenda do(a) {doctor} no dia {date} está livre."
-    
-    res = f"Consultas do(a) {doctor} no dia {date}:\n"
-    for app in appointments:
-        res += f" - {app['time']}: {app['pet']} (Tutor: {app['tutor']}) [ID: {app['id']}]\n"
+        return f"Agenda de {doctor} em {date} está livre."
+
+    res = f"📋 Agenda de {doctor} em {date}:\n"
+    for app in sorted(appointments, key=lambda x: x["time"]):
+        res += (f"  {app['time']} ({app.get('duration', 30)}min) "
+                f"— {app['pet']} / Tutor: {app['tutor']} [ID: {app['id']}]\n")
     return res
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Gerenciar agendamentos da clínica")
-    parser.add_argument("--action", choices=["schedule", "cancel", "list_doctor"], required=True)
-    parser.add_argument("--tutor", type=str, help="Nome do tutor (para schedule)")
-    parser.add_argument("--pet", type=str, help="Nome do pet (para schedule)")
-    parser.add_argument("--doctor", type=str, help="Nome do veterinário")
-    parser.add_argument("--specialty", type=str, help="Especialidade (para schedule)")
-    parser.add_argument("--date", type=str, help="Data formato YYYY-MM-DD")
-    parser.add_argument("--time", type=str, help="Horário formato HH:MM (para schedule)")
-    parser.add_argument("--id", type=int, help="ID da consulta (para cancel)")
 
-    args = parser.parse_args()
-
-    if args.action == "schedule":
-        if not all([args.tutor, args.pet, args.doctor, args.specialty, args.date, args.time]):
-            print("Erro: Faltam parâmetros para agendar (tutor, pet, doctor, specialty, date, time).")
-        else:
-            print(schedule(args.tutor, args.pet, args.doctor, args.specialty, args.date, args.time))
-    elif args.action == "cancel":
-        if not args.id:
-            print("Erro: ID da consulta é obrigatório para cancelar.")
-        else:
-            print(cancel(args.id))
-    elif args.action == "list_doctor":
-        if not all([args.doctor, args.date]):
-            print("Erro: Médico e data são obrigatórios para listar a agenda.")
-        else:
-            print(list_doctor_schedule(args.doctor, args.date))
+def list_available_slots(doctor: str, date: str,
+                         primeira_neurologica: bool = False) -> str:
+    """Lista os horários disponíveis para um médico em uma data."""
+    duration = 60 if primeira_neurologica else 30
+    slots = get_available_slots(doctor, date, duration)
+    if not slots:
+        return f"Sem horários disponíveis para {doctor} em {date}."
+    return (f"Horários disponíveis para {doctor} em {date} "
+            f"({'1h' if duration == 60 else '30min'}):\n"
+            + "\n".join(f"  - {s}" for s in slots))
