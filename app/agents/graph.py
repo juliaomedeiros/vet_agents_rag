@@ -19,7 +19,7 @@ def rotear_apos_guardrail_entrada(state: AgenteState) -> str:
 
 
 def rotear_apos_recepcionista(state: AgenteState) -> str:
-    """Roteia baseado na intenção detectada."""
+    """Roteia baseado na intenção detectada pelo recepcionista."""
     if state.get("resposta_final"):
         return "guardrail_saida"
 
@@ -30,7 +30,8 @@ def rotear_apos_recepcionista(state: AgenteState) -> str:
     elif intencao in ["AGENDAR", "REMARCAR", "CANCELAR"]:
         return "agendamento"
     else:
-        return "informacoes"  # fallback para informações
+        return "informacoes"  # fallback
+
 
 
 def rotear_apos_guardrail_saida(state: AgenteState) -> str:

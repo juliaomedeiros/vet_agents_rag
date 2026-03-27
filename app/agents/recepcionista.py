@@ -1,4 +1,7 @@
 import uuid
+import json
+import re
+import pytz
 from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +12,10 @@ from core.llm import get_llm
 from db.models import Cliente, Sessao
 from rag.memory import montar_contexto_completo
 from skills.loader import load_skill
-import json
-import re
 
 
 # ─────────────────────────────────────────────────────────────
-# Carrega o skill do recepcionista uma única vez (cache em memória)
+# Carrega o skill uma única vez (cache em memória)
 # ─────────────────────────────────────────────────────────────
 _SKILL = load_skill("vet-clinic-receptionist")
 
@@ -22,22 +23,21 @@ PROMPT_INTENCAO = f"""{_SKILL["persona"]}
 
 ---
 
-Sua tarefa neste momento é analisar a mensagem do cliente e identificar a INTENÇÃO.
+Analise a mensagem do cliente e identifique a INTENÇÃO.
 
 Responda APENAS com JSON:
 {{
-  "intencao": "SAUDACAO|INFORMACAO|AGENDAR|REMARCAR|CANCELAR|EMERGENCIA|OUTRO",
+  "intencao": "SAUDACAO|INFORMACAO|AGENDAR|REMARCAR|CANCELAR|OUTRO",
   "resumo": "resumo em uma linha do que o cliente quer"
 }}
 
 Definições:
-- SAUDACAO: oi, olá, primeiro contato sem pedido específico
-- INFORMACAO: quer saber sobre serviços, valores, horários, médicos, especialidades
-- AGENDAR: quer marcar uma consulta
-- REMARCAR: quer mudar data/hora de consulta existente
-- CANCELAR: quer cancelar uma consulta
-- EMERGENCIA: relato de situação grave (atropelamento, convulsão, sangramento, falta de ar)
-- OUTRO: dúvida geral que não se encaixa nas anteriores
+- SAUDACAO: oi, olá, primeiro contato sem pedido específico.
+- INFORMACAO: quer saber sobre serviços, valores, horários, médicos ou especialidades.
+- AGENDAR: quer marcar uma consulta — inclusive relatos de sintomas (urgentes ou não), pois todos os casos são direcionados ao veterinário via agendamento.
+- REMARCAR: quer mudar data/hora de consulta existente.
+- CANCELAR: quer cancelar uma consulta.
+- OUTRO: dúvida geral que não se encaixa nas anteriores.
 """
 
 
@@ -56,16 +56,15 @@ async def identificar_ou_criar_cliente(
     cliente = resultado.scalar_one_or_none()
 
     if cliente:
-        # Atualiza último contato
+        tz = pytz.timezone("America/Fortaleza")
         await db.execute(
             update(Cliente)
             .where(Cliente.id == cliente.id)
-            .values(ultimo_contato=datetime.utcnow())
+            .values(ultimo_contato=datetime.now(tz))
         )
         await db.commit()
         return cliente, False
 
-    # Cria novo cliente
     novo_cliente = Cliente(whatsapp=whatsapp)
     db.add(novo_cliente)
     await db.commit()
@@ -96,7 +95,7 @@ async def obter_ou_criar_sessao_ativa(
 
 
 async def detectar_intencao(mensagem: str) -> dict:
-    """Usa o Gemini para classificar a intenção da mensagem (guiado pelo skill)."""
+    """Usa o LLM para classificar a intenção da mensagem."""
     llm = get_llm()
     resposta = await llm.ainvoke([
         SystemMessage(content=PROMPT_INTENCAO),
@@ -114,53 +113,27 @@ async def detectar_intencao(mensagem: str) -> dict:
 # ─────────────────────────────────────────────────────────────
 async def recepcionista(state: AgenteState, db: AsyncSession) -> AgenteState:
     """
-    1. Identifica/cria cliente no banco
-    2. Cria ou recupera sessão ativa
-    3. Carrega contexto RAG + memória do cliente
-    4. Detecta intenção da mensagem (usando persona do skill)
-    5. Gera boas-vindas (se for primeiro contato/saudação) usando o skill
-    6. Detecta emergência e responde imediatamente se necessário
+    1. Identifica/cria cliente e sessão
+    2. Carrega contexto RAG + memória
+    3. Detecta intenção 
+    4. Gera boas-vindas quando é primeiro contato ou saudação
     """
     whatsapp = state["whatsapp"]
     mensagem = state["messages"][-1].content
     llm = get_llm()
 
-    # 1. Identifica cliente
+    # 1. Identifica cliente e sessão
     cliente, cliente_novo = await identificar_ou_criar_cliente(db, whatsapp)
-
-    # 2. Cria ou recupera sessão
     sessao, sessao_nova = await obter_ou_criar_sessao_ativa(db, cliente.id)
 
-    # 3. Contexto RAG + memória
+    # 2. Contexto RAG + memória
     contexto = await montar_contexto_completo(db, cliente.id, mensagem)
 
-    # 4. Detecta intenção
+    # 3. Detecta intenção
     resultado_intencao = await detectar_intencao(mensagem)
     intencao = resultado_intencao.get("intencao", "OUTRO")
 
-    # 5. Resposta imediata para EMERGENCIA (skill define essa regra)
-    if intencao == "EMERGENCIA":
-        resposta_emergencia = (
-            "🚨 *Atenção! Isso parece uma emergência!*\n\n"
-            "Por favor, dirija-se *imediatamente* à nossa clínica — "
-            "temos atendimento de urgência disponível *24 horas*. "
-            "Não é necessário agendar.\n\n"
-            "📍 Rua dos Animais Felizes, 123 — Jardim Pet, São Paulo.\n\n"
-            "Se precisar de orientação enquanto vem até aqui, estou aqui! 🐾"
-        )
-        return {
-            **state,
-            "cliente_id": str(cliente.id),
-            "sessao_id": str(sessao.id),
-            "cliente_nome": cliente.nome,
-            "cliente_novo": cliente_novo,
-            "intencao": intencao,
-            "contexto_clinica": contexto["contexto_clinica"],
-            "historico_cliente": contexto["historico_cliente"],
-            "resposta_final": resposta_emergencia,
-        }
-
-    # 6. Resposta de boas-vindas usando o template do skill
+    # 4. Boas-vindas em sessão nova ou saudação
     resposta_bv = None
     if sessao_nova and (intencao == "SAUDACAO" or cliente_novo):
         nome = cliente.nome or "Tutor"
@@ -168,8 +141,6 @@ async def recepcionista(state: AgenteState, db: AsyncSession) -> AgenteState:
             f"\nHistórico do cliente:\n{contexto['historico_cliente']}"
             if contexto["tem_historico"] else ""
         )
-
-        # Usa a persona do skill + template de boas-vindas do assets/
         welcome_template = _SKILL["assets"].get("welcome_template", "")
 
         prompt_bv = f"""{_SKILL["persona"]}
@@ -188,10 +159,10 @@ async def recepcionista(state: AgenteState, db: AsyncSession) -> AgenteState:
 {welcome_template}
 
 ## Instruções
-- Adapte o template acima ao contexto do cliente.
-- Use linguagem coloquial, calorosa e profissional.
-- Seja extremamente breve e conciso (não gaste tokens desnecessariamente).
-- SEMPRE termine a frase e NUNCA deixe frases incompletas ou cortadas.
+- Adapte o template ao contexto do cliente.
+- Use linguagem coloquial e direta.
+- Seja breve e conciso. (Não gaste tokens desnecessariamente)
+- SEMPRE termine cada frase. NUNCA deixe textos cortados.
 - Use emojis com moderação. 🐾
 - Nunca invente informações que não estão no contexto.
 """

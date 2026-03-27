@@ -1,0 +1,34 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.2.2, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+plugins: asyncio-0.23.8, anyio-4.12.1
+asyncio: mode=Mode.STRICT
+collecting ... collected 18 items
+
+tests/test_agendamento.py::TestCancelar::test_cancela_consulta_unica PASSED [  5%]
+tests/test_agendamento.py::TestCancelar::test_sem_consulta_retorna_mensagem_adequada PASSED [ 11%]
+tests/test_agendamento.py::TestCancelar::test_multiplas_consultas_pede_confirmacao PASSED [ 16%]
+tests/test_agendamento.py::TestRemarcar::test_remarcar_com_dados_completos PASSED [ 22%]
+tests/test_agendamento.py::TestRemarcar::test_remarcar_sem_dados_retorna_pergunta PASSED [ 27%]
+tests/test_agendamento.py::TestAgendar::test_retorna_pergunta_quando_dados_incompletos PASSED [ 33%]
+tests/test_agendamento.py::TestAgendar::test_exibe_template_tutor_quando_necessario PASSED [ 38%]
+tests/test_calendar.py::TestListarHorariosDisponiveis::test_retorna_slots_quando_agenda_livre PASSED [ 44%]
+tests/test_calendar.py::TestListarHorariosDisponiveis::test_slots_apenas_em_dias_uteis PASSED [ 50%]
+tests/test_calendar.py::TestListarHorariosDisponiveis::test_slots_dentro_do_horario_comercial PASSED [ 55%]
+tests/test_calendar.py::TestListarHorariosDisponiveis::test_exclui_periodos_ocupados PASSED [ 61%]
+tests/test_calendar.py::TestListarHorariosDisponiveis::test_retorna_lista_vazia_quando_agenda_cheia PASSED [ 66%]
+tests/test_calendar.py::TestListarHorariosDisponiveis::test_retorna_lista_vazia_em_caso_de_erro PASSED [ 72%]
+tests/test_recepcionista.py::TestDetectarIntencao::test_classifica_saudacao PASSED [ 77%]
+tests/test_recepcionista.py::TestDetectarIntencao::test_classifica_agendar_para_sintomas_urgentes PASSED [ 83%]
+tests/test_recepcionista.py::TestDetectarIntencao::test_classifica_remarcar PASSED [ 88%]
+tests/test_recepcionista.py::TestDetectarIntencao::test_retorna_outro_em_caso_de_json_invalido PASSED [ 94%]
+tests/test_recepcionista.py::TestDetectarIntencao::test_nao_existe_intencao_emergencia PASSED [100%]
+
+=============================== warnings summary ===============================
+core/config.py:6
+  /app/core/config.py:6: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class Settings(BaseSettings):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 18 passed, 1 warning in 2.94s =========================

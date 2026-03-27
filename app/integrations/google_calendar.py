@@ -1,5 +1,6 @@
 import os
 import uuid
+import pytz
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -13,10 +14,9 @@ from core.config import get_settings
 
 settings = get_settings()
 
-# Escopos necessários para Calendar + Gmail
+# Escopo necessário apenas para Calendar (Gmail é via SMTP)
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 
@@ -64,6 +64,71 @@ def get_calendar_service():
 # ─────────────────────────────────────────────────────────────
 # Verifica disponibilidade de horário
 # ─────────────────────────────────────────────────────────────
+def listar_horarios_disponiveis(
+    calendar_id: str,
+    dias: int = 30,
+    duracao_minutos: int = 30,
+) -> list[str]:
+    """
+    Retorna slots livres dos próximos `dias` dias (Seg–Sex, 14h–18h).
+    Usa a API freebusy para detectar ocupações e filtra os slots livres.
+    Retorna lista de strings no formato 'DD/MM/AAAA HH:MM'.
+    """
+    try:
+        service = get_calendar_service()
+
+        tz = pytz.timezone("America/Fortaleza")
+        agora = datetime.now(tz)
+        fim_periodo = agora + timedelta(days=dias)
+
+        body = {
+            "timeMin": agora.isoformat(),
+            "timeMax": fim_periodo.isoformat(),
+            "items": [{"id": calendar_id}],
+        }
+        resultado = service.freebusy().query(body=body).execute()
+        periodos_ocupados = resultado["calendars"][calendar_id]["busy"]
+
+        # Converte períodos ocupados para intervalos datetime aware (Brasília)
+        ocupados = []
+        for p in periodos_ocupados:
+            inicio = datetime.fromisoformat(p["start"].replace("Z", "+00:00")).astimezone(tz)
+            fim = datetime.fromisoformat(p["end"].replace("Z", "+00:00")).astimezone(tz)
+            ocupados.append((inicio, fim))
+
+        # Gera todos os slots possíveis e filtra os livres
+        slots_livres = []
+        dia_atual = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        while dia_atual <= fim_periodo:
+            # Apenas dias úteis (Seg=0 … Sex=4)
+            if dia_atual.weekday() < 5:
+                for hora in range(14, 18):
+                    for minuto in (0, 30):
+                        slot_inicio = dia_atual.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+                        slot_fim = slot_inicio + timedelta(minutes=duracao_minutos)
+
+                        # Ignora slots já passados
+                        if slot_inicio <= agora:
+                            continue
+
+                        # Verifica conflito com períodos ocupados
+                        livre = all(
+                            slot_fim <= ocp_inicio or slot_inicio >= ocp_fim
+                            for ocp_inicio, ocp_fim in ocupados
+                        )
+                        if livre:
+                            slots_livres.append(slot_inicio.strftime("%d/%m/%Y %H:%M"))
+
+            dia_atual += timedelta(days=1)
+
+        return slots_livres
+
+    except HttpError as e:
+        print(f"[Calendar] Erro ao listar horários: {e}")
+        return []
+
+
 def verificar_disponibilidade(
     calendar_id: str,
     data_hora: datetime,
@@ -75,9 +140,9 @@ def verificar_disponibilidade(
     """
     try:
         service = get_calendar_service()
-
-        inicio = data_hora.isoformat() + "Z"
-        fim = (data_hora + timedelta(minutes=duracao_minutos)).isoformat() + "Z"
+        tz = pytz.timezone("America/Fortaleza")
+        inicio = data_hora.astimezone(tz).isoformat()
+        fim = (data_hora + timedelta(minutes=duracao_minutos)).astimezone(tz).isoformat()
 
         # freebusy query — mais eficiente que listar eventos
         body = {

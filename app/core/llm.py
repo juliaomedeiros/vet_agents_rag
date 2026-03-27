@@ -15,7 +15,7 @@ def get_llm() -> ChatGoogleGenerativeAI:
         model=settings.gemini_model,
         google_api_key=settings.gemini_api_key,
         temperature=0.3,        # respostas mais consistentes para atendimento
-        max_output_tokens=1024,
+        max_output_tokens=2048,
         convert_system_message_to_human=True,  # compatibilidade Gemini
     )
 
